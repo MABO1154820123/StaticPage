@@ -1,1 +1,89 @@
-<h1>你好，World！</h1>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>iframe 管理器</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- 顶部标题栏 -->
+    <header class="header">
+        <h1>iframe 管理器</h1>
+        <div class="controls">
+            <button class="btn btn-primary" id="addIframe">+ 添加设备</button>
+            <button class="btn btn-secondary" id="clearAll">清空所有</button>
+        </div>
+        <div class="zoom-controls">
+            <span class="zoom-label">缩放:</span>
+            <button class="zoom-btn" id="zoomOut" title="缩小">−</button>
+            <span class="zoom-value" id="zoomValue">30.0%</span>
+            <button class="zoom-btn" id="zoomIn" title="放大">+</button>
+            <select class="zoom-select" id="zoomStep" title="选择缩放挡位">
+                <option value="0">0.1%</option>
+                <option value="1">1%</option>
+                <option value="2">5%</option>
+                <option value="3" selected>10%</option>
+                <option value="4">20%</option>
+            </select>
+        </div>
+    </header>
+
+    <!-- URL 输入对话框 -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>添加设备</h3>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label for="urlInput">请输入视频流地址：</label>
+                <input type="text" id="urlInput" placeholder="例如: 192.168.1.19:8080/video">
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="modalCancel">取消</button>
+                <button class="btn btn-primary" id="modalConfirm">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 确认对话框 -->
+    <div class="modal-overlay" id="confirmModalOverlay">
+        <div class="modal confirm-modal">
+            <div class="modal-header">
+                <h3>确认删除</h3>
+                <button class="modal-close" id="confirmModalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="confirm-icon">❓</div>
+                <p class="confirm-message" id="confirmMessage">是否要删除该设备？</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="confirmCancel">取消</button>
+                <button class="btn btn-danger" id="confirmOk">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 左侧边栏 - 紧贴浏览器窗口左边 -->
+    <aside class="sidebar" id="sidebar">
+        <!-- 整体折叠按钮 -->
+        <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="折叠/展开菜单栏">◀</button>
+        
+        <!-- 设备列表容器 -->
+        <div class="sidebar-content" id="sidebarContent">
+            <!-- 设备列表将在这里动态生成 -->
+        </div>
+    </aside>
+
+    <!-- 主内容区 - 视频流直接展示 -->
+    <main class="main-content" id="mainContent">
+        <!-- 视频流图片将在这里动态生成 -->
+    </main>
+
+    <!-- 全屏切换按钮 -->
+    <button class="fullscreen-btn" id="fullscreenBtn" title="全屏/退出全屏">⛶</button>
+
+    <script src="script.js?v=24"></script>
+</body>
+</html>

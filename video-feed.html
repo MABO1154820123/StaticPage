@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video Feed</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #1a1a2e;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #feed-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #video-img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      cursor: pointer;
+    }
+
+    /* 点击时的视觉反馈 */
+    #video-img:active {
+      opacity: 0.8;
+    }
+
+    /* 加载状态 */
+    .loading {
+      position: absolute;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 14px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="feed-container">
+    <div class="loading">加载中...</div>
+    <img src="" alt="Video Feed" id="video-img">
+  </div>
+
+  <script>
+    // 从URL参数获取完整的视频流地址
+    const urlParams = new URLSearchParams(window.location.search);
+    let streamUrl = urlParams.get('url');
+    let zoom = parseFloat(urlParams.get('zoom')) || 20;
+    const HID_URL = `http://192.168.1.19:1900`; // HID控制服务器
+
+    const img = document.getElementById('video-img');
+    const loading = document.querySelector('.loading');
+
+    // 如果地址没有协议，添加 http://
+    if (streamUrl && !/^https?:\/\//i.test(streamUrl)) {
+      streamUrl = 'http://' + streamUrl;
+    }
+
+    // 应用缩放
+    function applyZoom() {
+      const scale = zoom / 100;
+      img.style.transform = `scale(${scale})`;
+      img.style.transformOrigin = 'center center';
+    }
+
+    // 设置视频流源
+    img.src = streamUrl;
+    applyZoom();
+
+    // 图片加载完成后隐藏loading
+    img.onload = () => {
+      loading.style.display = 'none';
+    };
+
+    // 处理点击事件 - 计算相对坐标并发送
+    img.addEventListener('click', (e) => {
+      const rect = img.getBoundingClientRect();
+
+      // 计算点击位置在图片上的百分比
+      const percentX = ((e.clientX - rect.left) / rect.width) * 100;
+      const percentY = ((e.clientY - rect.top) / rect.height) * 100;
+
+      // 转换为实际屏幕坐标（基于720x1600）
+      const clickX = Math.round((percentX / 100) * 720);
+      const clickY = Math.round((percentY / 100) * 1600);
+
+      // 发送点击命令
+      const clickUrl = `${HID_URL}/hid?command=cl:${clickX},${clickY},100`;
+      fetch(clickUrl, { mode: 'no-cors' }).catch(() => {});
+
+      console.log(`CLICK: ${clickX},${clickY}`);
+    });
+
+    // 接收来自父窗口的消息控制
+    window.addEventListener('message', function(e) {
+      const { action, value } = e.data;
+
+      switch(action) {
+        case 'up':
+          sendSwipe(2); // 上滑
+          break;
+        case 'down':
+          sendSwipe(3); // 下滑
+          break;
+        case 'left':
+          sendSwipe(0); // 左滑
+          break;
+        case 'right':
+          sendSwipe(1); // 右滑
+          break;
+        case 'home':
+          sendFunction('home');
+          break;
+        case 'task':
+          sendFunction('task');
+          break;
+        case 'back':
+          sendFunction('back');
+          break;
+        case 'click':
+          // click功能通过直接点击图片触发，这里可以添加额外逻辑
+          console.log('Click mode active');
+          break;
+        case 'setZoom':
+          // 接收缩放值并应用
+          zoom = value;
+          applyZoom();
+          break;
+      }
+    });
+
+    // 发送滑动命令
+    function sendSwipe(direction) {
+      // 0:左, 1:右, 2:上, 3:下
+      const swipeUrl = `${HID_URL}/hid?command=sw:${direction}`;
+      fetch(swipeUrl, { mode: 'no-cors' }).catch(() => {});
+      console.log(`SWIPE: ${['左','右','上','下'][direction]}`);
+    }
+
+    // 发送功能命令
+    function sendFunction(func) {
+      const funcUrl = `${HID_URL}/hid?command=fun:${func}`;
+      fetch(funcUrl, { mode: 'no-cors' }).catch(() => {});
+      console.log(`FUNCTION: ${func}`);
+    }
+  </script>
+</body>
+</html>

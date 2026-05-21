@@ -1,0 +1,597 @@
+// iframe 管理器 - 直接嵌入视频流版本
+class IframeManager {
+    constructor() {
+        this.devices = new Map();
+        this.zoomSteps = [0.1, 1, 5, 10, 20];
+        this.zoomStepIndex = 3; // 默认10%
+        this.globalZoom = 30; // 全局缩放比例，默认30%
+        this.init();
+    }
+
+    // 检测视频流类型
+    detectStreamType(url) {
+        // WebRTC 流检测
+        if (url.includes('/webrtc') || url.includes('/webrtc/')) {
+            return 'webrtc';
+        }
+        // MJPEG 流检测
+        if (url.includes('/stream.mjpeg') || url.includes('.mjpeg')) {
+            return 'mjpeg';
+        }
+        // 默认尝试 MJPEG
+        return 'mjpeg';
+    }
+
+    // 根据设备 URL 获取 HID 服务器地址
+    getHIDUrl(deviceUrl) {
+        try {
+            const url = new URL(deviceUrl);
+            const ipParts = url.hostname.split('.');
+            const lastSegment = parseInt(ipParts[3]);
+            const hidPort = lastSegment * 100; // IP 最后一段 + 00
+            return `http://${url.hostname}:${hidPort}`;
+        } catch (e) {
+            console.error('[HID] 解析设备 URL 失败:', deviceUrl, e);
+            return null;
+        }
+    }
+
+    init() {
+        this.bindEvents();
+        this.loadConfigs();
+        // 默认折叠侧边栏
+        document.getElementById('sidebar').classList.add('collapsed');
+        // 默认全屏显示
+        document.body.classList.add('fullscreen');
+    }
+
+    // 绑定事件
+    bindEvents() {
+        // 添加设备按钮
+        document.getElementById('addIframe').addEventListener('click', () => {
+            this.showModal();
+        });
+
+        // 清空所有
+        document.getElementById('clearAll').addEventListener('click', () => {
+            this.clearAllDevices();
+        });
+
+        // 模态框事件
+        document.getElementById('modalClose').addEventListener('click', () => this.hideModal());
+        document.getElementById('modalCancel').addEventListener('click', () => this.hideModal());
+        document.getElementById('modalConfirm').addEventListener('click', () => this.confirmAdd());
+        document.getElementById('modalOverlay').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) this.hideModal();
+        });
+
+        // 确认对话框事件
+        document.getElementById('confirmModalClose').addEventListener('click', () => this.hideConfirmModal());
+        document.getElementById('confirmCancel').addEventListener('click', () => this.hideConfirmModal());
+        document.getElementById('confirmOk').addEventListener('click', () => this.confirmDelete());
+        document.getElementById('confirmModalOverlay').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) this.hideConfirmModal();
+        });
+
+        // 侧边栏整体折叠按钮
+        document.getElementById('sidebarCollapseBtn').addEventListener('click', () => {
+            document.getElementById('sidebar').classList.toggle('collapsed');
+        });
+
+        // 回车键确认
+        document.getElementById('urlInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.confirmAdd();
+        });
+
+        // 全局缩放控制
+        this.bindZoomControls();
+
+        // 全屏切换按钮
+        this.bindFullscreenControl();
+
+        // 滚轮缩放
+        this.bindWheelZoom();
+    }
+
+    // 绑定全屏控制
+    bindFullscreenControl() {
+        const fullscreenBtn = document.getElementById('fullscreenBtn');
+        fullscreenBtn.addEventListener('click', () => {
+            document.body.classList.toggle('fullscreen');
+            // 切换图标
+            if (document.body.classList.contains('fullscreen')) {
+                fullscreenBtn.textContent = '⛶';
+                fullscreenBtn.title = '退出全屏';
+            } else {
+                fullscreenBtn.textContent = '⛶';
+                fullscreenBtn.title = '全屏';
+            }
+        });
+    }
+
+    // 绑定滚轮缩放
+    bindWheelZoom() {
+        const mainContent = document.getElementById('mainContent');
+        mainContent.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            // 滚轮缩放步长 5%
+            const step = 5;
+            if (e.deltaY < 0) {
+                // 向上滚动 - 放大
+                this.globalZoom = Math.min(120, this.globalZoom + step);
+            } else {
+                // 向下滚动 - 缩小
+                this.globalZoom = Math.max(10, this.globalZoom - step);
+            }
+            this.applyGlobalZoom();
+        }, { passive: false });
+    }
+
+    // 绑定全局缩放控制
+    bindZoomControls() {
+        const zoomOut = document.getElementById('zoomOut');
+        const zoomIn = document.getElementById('zoomIn');
+        const zoomStep = document.getElementById('zoomStep');
+
+        zoomOut.addEventListener('click', () => {
+            const step = this.zoomSteps[parseInt(zoomStep.value)];
+            this.globalZoom = Math.max(10, this.globalZoom - step);
+            this.applyGlobalZoom();
+        });
+
+        zoomIn.addEventListener('click', () => {
+            const step = this.zoomSteps[parseInt(zoomStep.value)];
+            this.globalZoom = Math.min(120, this.globalZoom + step);
+            this.applyGlobalZoom();
+        });
+
+        zoomStep.addEventListener('change', () => {
+            this.zoomStepIndex = parseInt(zoomStep.value);
+        });
+    }
+
+    // 更新单个图片尺寸
+    updateImageSize(img, deviceState) {
+        const baseWidth = deviceState.size?.width || 720;
+        const baseHeight = deviceState.size?.height || 1600;
+        const scale = this.globalZoom / 100;
+        // 直接设置宽高，不使用 transform
+        img.style.width = `${baseWidth * scale}px`;
+        img.style.height = `${baseHeight * scale}px`;
+    }
+
+    // 应用全局缩放
+    applyGlobalZoom() {
+        document.getElementById('zoomValue').textContent = `${this.globalZoom.toFixed(1)}%`;
+        // 缩放 MJPEG 图片
+        const images = document.querySelectorAll('.video-feed:not(.webrtc-canvas)');
+        images.forEach(img => {
+            const deviceId = img.dataset.id;
+            const deviceState = this.devices.get(deviceId);
+            if (deviceState) {
+                this.updateImageSize(img, deviceState);
+            }
+        });
+        // 缩放 WebRTC wrapper
+        const webrtcWrappers = document.querySelectorAll('.webrtc-wrapper');
+        webrtcWrappers.forEach(wrapper => {
+            const deviceId = wrapper.dataset.id;
+            const deviceState = this.devices.get(deviceId);
+            if (deviceState) {
+                this.updateWebRTCSize(wrapper, deviceState);
+            }
+        });
+    }
+
+    // 显示模态框
+    showModal() {
+        document.getElementById('modalOverlay').classList.add('active');
+        document.getElementById('urlInput').value = '';
+        document.getElementById('urlInput').focus();
+    }
+
+    // 隐藏模态框
+    hideModal() {
+        document.getElementById('modalOverlay').classList.remove('active');
+    }
+
+    // 显示确认对话框
+    showConfirmModal(message, onConfirm) {
+        this.confirmCallback = onConfirm;
+        document.getElementById('confirmMessage').textContent = message;
+        document.getElementById('confirmModalOverlay').classList.add('active');
+    }
+
+    // 隐藏确认对话框
+    hideConfirmModal() {
+        document.getElementById('confirmModalOverlay').classList.remove('active');
+        this.confirmCallback = null;
+    }
+
+    // 确认删除
+    confirmDelete() {
+        if (this.confirmCallback) {
+            this.confirmCallback();
+        }
+        this.hideConfirmModal();
+    }
+
+    // 确认添加
+    confirmAdd() {
+        const url = document.getElementById('urlInput').value.trim();
+        if (!url) {
+            alert('请输入视频流地址');
+            return;
+        }
+        this.addDevice(url);
+        this.hideModal();
+    }
+
+    // 获取设备标题（ip:port）
+    getDeviceTitle(url) {
+        try {
+            let cleanUrl = url.replace(/^https?:\/\//i, '');
+            const match = cleanUrl.match(/^([^\/]+)/);
+            return match ? match[1] : cleanUrl;
+        } catch {
+            return url;
+        }
+    }
+
+    // 添加设备
+    addDevice(url) {
+        const id = Date.now().toString();
+        const title = this.getDeviceTitle(url);
+
+        // 自动添加 http:// 前缀（如果没有协议）
+        let fullUrl = url;
+        if (!url.match(/^https?:\/\//i)) {
+            fullUrl = 'http://' + url;
+        }
+
+        // 检测视频流类型
+        const streamType = this.detectStreamType(fullUrl);
+
+        console.log('[调试] 添加设备:', { id, title, url: fullUrl, streamType });
+
+        const deviceState = {
+            id,
+            url: fullUrl,
+            title,
+            streamType,
+            toolsCollapsed: false, // 工具组默认展开
+            size: { width: 720, height: 1600 } // 默认设备尺寸
+        };
+
+        this.devices.set(id, deviceState);
+
+        // 创建设备列表项（包含工具组）
+        this.createDeviceItem(deviceState);
+
+        // 创建视频窗口
+        this.createVideoWindow(deviceState);
+
+        // 保存配置
+        this.saveConfigs();
+    }
+
+    // 创建设备列表项（包含可折叠的工具组）
+    createDeviceItem(deviceState) {
+        const sidebarContent = document.getElementById('sidebarContent');
+
+        const item = document.createElement('div');
+        item.className = 'device-item';
+        item.dataset.id = deviceState.id;
+        if (deviceState.toolsCollapsed) {
+            item.classList.add('collapsed');
+        }
+
+        // 设备标题栏
+        const header = document.createElement('div');
+        header.className = 'device-header';
+        header.innerHTML = `
+            <button class="device-toggle-btn" title="展开/折叠工具">▼</button>
+            <span class="device-name">${deviceState.title}</span>
+            <button class="device-delete" title="删除">×</button>
+        `;
+
+        // 工具面板
+        const tools = document.createElement('div');
+        tools.className = 'device-tools';
+        tools.innerHTML = `
+            <div class="tool-row">
+                <button class="tool-btn" data-action="up" title="上">⬆️</button>
+                <button class="tool-btn" data-action="down" title="下">⬇️</button>
+                <button class="tool-btn" data-action="left" title="左">⬅️</button>
+                <button class="tool-btn" data-action="right" title="右">➡️</button>
+            </div>
+            <div class="tool-row">
+                <button class="tool-btn" data-action="home" title="Home">🏠</button>
+                <button class="tool-btn" data-action="task" title="Task">📋</button>
+                <button class="tool-btn" data-action="back" title="Back">↩️</button>
+                <button class="tool-btn primary" data-action="click" title="Click">👆</button>
+            </div>
+        `;
+
+        item.appendChild(header);
+        item.appendChild(tools);
+        sidebarContent.appendChild(item);
+
+        // 绑定事件
+        this.bindDeviceItemEvents(item, deviceState);
+    }
+
+    // 绑定设备项事件
+    bindDeviceItemEvents(item, deviceState) {
+        const toggleBtn = item.querySelector('.device-toggle-btn');
+        const deleteBtn = item.querySelector('.device-delete');
+
+        // 折叠/展开工具组
+        toggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            item.classList.toggle('collapsed');
+            deviceState.toolsCollapsed = item.classList.contains('collapsed');
+            this.saveConfigs();
+        });
+
+        // 删除设备
+        deleteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.showConfirmModal(`是否要删除设备 ${deviceState.title}？`, () => {
+                this.removeDevice(deviceState.id);
+            });
+        });
+
+        // 绑定工具按钮事件
+        this.bindToolEvents(item, deviceState);
+    }
+
+    // 绑定工具按钮事件
+    bindToolEvents(item, deviceState) {
+        // 工具按钮点击
+        item.querySelectorAll('.tool-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const action = btn.dataset.action;
+
+                switch(action) {
+                    case 'up':
+                    case 'down':
+                    case 'left':
+                    case 'right':
+                    case 'home':
+                    case 'task':
+                    case 'back':
+                        this.sendHIDCommand(action, deviceState);
+                        break;
+                }
+            });
+        });
+    }
+
+    // 创建视频窗口（直接嵌入视频流）
+    createVideoWindow(deviceState) {
+        const container = document.getElementById('mainContent');
+
+        if (deviceState.streamType === 'webrtc') {
+            // WebRTC 流 - 使用 iframe 嵌入
+            this.createWebRTCWindow(deviceState, container);
+        } else {
+            // MJPEG 流 - 使用 img 标签
+            this.createMJPEGWindow(deviceState, container);
+        }
+
+        console.log('[调试] 视频窗口已创建:', deviceState.id, '类型:', deviceState.streamType);
+    }
+
+    // 创建 MJPEG 视频窗口
+    createMJPEGWindow(deviceState, container) {
+        // 视频图片元素
+        const img = document.createElement('img');
+        img.className = 'video-feed';
+        img.alt = deviceState.title;
+        img.dataset.id = deviceState.id;
+
+        // 设置视频流地址
+        console.log('[调试] 设置 MJPEG 视频源:', deviceState.url);
+        img.src = deviceState.url;
+
+        // 图片加载完成后，设置尺寸（根据全局缩放）
+        img.onload = () => {
+            this.updateImageSize(img, deviceState);
+            console.log('[调试] MJPEG 图片加载完成，应用全局缩放:', this.globalZoom);
+        };
+
+        // 加载失败显示错误
+        img.onerror = (e) => {
+            console.error('[调试] MJPEG 视频加载失败:', deviceState.url, e);
+            img.style.border = '2px solid #ff4757';
+        };
+
+        // 点击发送 click 命令
+        this.bindClickEvent(img, deviceState);
+
+        container.appendChild(img);
+    }
+
+    // 创建 WebRTC 视频窗口
+    createWebRTCWindow(deviceState, container) {
+        // WebRTC 使用 iframe 嵌入整个页面（由于跨域限制，无法提取 canvas）
+        const wrapper = document.createElement('div');
+        wrapper.className = 'video-feed webrtc-wrapper';
+        wrapper.dataset.id = deviceState.id;
+
+        const iframe = document.createElement('iframe');
+        iframe.className = 'webrtc-iframe';
+        iframe.src = deviceState.url;
+        iframe.allow = 'autoplay; fullscreen';
+        iframe.style.border = 'none';
+
+        wrapper.appendChild(iframe);
+        container.appendChild(wrapper);
+
+        // 设置尺寸
+        this.updateWebRTCSize(wrapper, deviceState);
+
+        console.log('[调试] WebRTC iframe 创建完成，应用全局缩放:', this.globalZoom);
+    }
+
+    // 更新 WebRTC 尺寸
+    updateWebRTCSize(wrapper, deviceState) {
+        const baseWidth = deviceState.size?.width || 720;
+        const baseHeight = deviceState.size?.height || 1600;
+        const scale = this.globalZoom / 100;
+        wrapper.style.width = `${baseWidth * scale}px`;
+        wrapper.style.height = `${baseHeight * scale}px`;
+        // 同时设置内部 iframe 尺寸
+        const iframe = wrapper.querySelector('.webrtc-iframe');
+        if (iframe) {
+            iframe.style.width = '100%';
+            iframe.style.height = '100%';
+        }
+    }
+
+    // 绑定点击事件
+    bindClickEvent(img, deviceState) {
+        let mouseDownTime = 0;
+        img.addEventListener('mousedown', (e) => {
+            mouseDownTime = Date.now();
+        });
+        img.addEventListener('mouseup', (e) => {
+            const duration = Date.now() - mouseDownTime;
+
+            // 计算点击位置相对于图片的百分比
+            const rect = img.getBoundingClientRect();
+            const percentX = (e.clientX - rect.left) / rect.width;
+            const percentY = (e.clientY - rect.top) / rect.height;
+
+            // 获取设备尺寸（从缓存或默认值）
+            const deviceSize = deviceState.size || { width: 720, height: 1600 };
+
+            // 计算实际坐标（百分比 * 设备尺寸，四舍五入）
+            const x = Math.round(percentX * deviceSize.width);
+            const y = Math.round(percentY * deviceSize.height);
+
+            console.log('[HID Click] 百分比:', percentX.toFixed(2), percentY.toFixed(2),
+                        '坐标:', x, y, '延迟:', duration, '设备尺寸:', deviceSize);
+
+            this.sendHIDCommand('click', deviceState, { x, y, duration });
+        });
+    }
+
+    // 发送 HID 命令（公共方法）
+    async sendHIDCommand(action, deviceState, clickData = null) {
+        try {
+            // 获取 HID 服务器地址
+            const hidUrl = this.getHIDUrl(deviceState.url);
+            if (!hidUrl) {
+                console.error('[HID] 无法获取 HID 服务器地址');
+                return;
+            }
+
+            let command = '';
+            switch(action) {
+                case 'up': command = 'sw:2'; break;
+                case 'down': command = 'sw:3'; break;
+                case 'left': command = 'sw:0'; break;
+                case 'right': command = 'sw:1'; break;
+                case 'home': command = 'fun:home'; break;
+                case 'task': command = 'fun:task'; break;
+                case 'back': command = 'fun:back'; break;
+                case 'click':
+                    if (clickData) {
+                        command = `cl:${clickData.x},${clickData.y},${clickData.duration}`;
+                    }
+                    break;
+            }
+
+            if (command) {
+                const url = `${hidUrl}/hid?command=${command}`;
+                console.log('[HID] 发送命令:', action, 'URL:', url);
+                await fetch(url, {
+                    method: 'GET',
+                    mode: 'no-cors'
+                });
+            }
+        } catch (e) {
+            console.log('[HID] 命令发送失败:', action, e);
+        }
+    }
+
+    // 删除设备
+    removeDevice(id) {
+        console.log('[调试] 删除设备:', id);
+
+        // 从 Map 中删除
+        this.devices.delete(id);
+
+        // 删除设备列表项
+        const deviceItem = document.querySelector(`.device-item[data-id="${id}"]`);
+        if (deviceItem) deviceItem.remove();
+
+        // 删除视频元素（MJPEG img 或 WebRTC iframe）
+        const videoElement = document.querySelector(`.video-feed[data-id="${id}"]`);
+        if (videoElement) videoElement.remove();
+
+        // 保存配置
+        this.saveConfigs();
+    }
+
+    // 清空所有设备
+    clearAllDevices() {
+        if (this.devices.size === 0) return;
+
+        this.showConfirmModal('确定要删除所有设备吗？', () => {
+            console.log('[调试] 清空所有设备');
+            this.devices.clear();
+            document.getElementById('sidebarContent').innerHTML = '';
+            document.getElementById('mainContent').innerHTML = '';
+            this.saveConfigs();
+        });
+    }
+
+    // 保存配置到 localStorage
+    saveConfigs() {
+        const configs = Array.from(this.devices.values()).map(device => ({
+            id: device.id,
+            url: device.url,
+            title: device.title,
+            streamType: device.streamType,
+            toolsCollapsed: device.toolsCollapsed,
+            size: device.size
+        }));
+        localStorage.setItem('videoConfigs', JSON.stringify(configs));
+        console.log('[调试] 配置已保存, 设备数:', configs.length);
+    }
+
+    // 从 localStorage 加载配置
+    loadConfigs() {
+        try {
+            const configs = JSON.parse(localStorage.getItem('videoConfigs') || '[]');
+            console.log('[调试] 加载配置, 设备数:', configs.length);
+
+            configs.forEach(config => {
+                const deviceState = {
+                    id: config.id || Date.now().toString(),
+                    url: config.url,
+                    title: config.title || this.getDeviceTitle(config.url),
+                    streamType: config.streamType || this.detectStreamType(config.url),
+                    toolsCollapsed: config.toolsCollapsed || false,
+                    size: config.size || { width: 720, height: 1600 }
+                };
+
+                this.devices.set(deviceState.id, deviceState);
+                this.createDeviceItem(deviceState);
+                this.createVideoWindow(deviceState);
+            });
+        } catch (e) {
+            console.error('[调试] 加载配置失败:', e);
+        }
+    }
+}
+
+// 初始化
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('[调试] 页面加载完成, 初始化管理器');
+    new IframeManager();
+});

@@ -1,0 +1,8 @@
+home-hid?command=fun:home
+task-hid?command=fun:task
+back-hid?command=fun:back
+left-hid?command=sw:0
+right-hid?command=sw:1
+up-hid?command=sw:2
+down-hid?command=sw:3
+click-hid?command=cl:x,y,duration
